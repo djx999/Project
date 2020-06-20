@@ -1,0 +1,98 @@
+#include <TCPNet.h>
+#include <Thread_Pool.h>
+#include <TcpKernel.h>
+int InitNet()
+{
+	struct sockaddr_in addrSer;
+	bzero(&addrSer,sizeof(addrSer));
+	addrSer.sin_family = AF_INET;
+	addrSer.sin_port = htons(8000);
+	if((inet_pton(AF_INET,"192.168.1.103",&addrSer.sin_addr.s_addr)) == -1)
+	{
+		printf("wrong!\n");
+		return -1;
+	}
+	int sockfd = socket(AF_INET,SOCK_STREAM,0);
+	bind(sockfd,(struct sockaddr *)&addrSer,sizeof(addrSer));
+	listen(sockfd,128);
+	return sockfd;
+}
+
+void *UserJob(void *arg)
+{
+	struct sockaddr_in clientaddr;
+	bzero(&clientaddr,sizeof(clientaddr));
+	pthread_mutex_init(&aclock,NULL);
+	int serverfd = *(int *)arg;
+	int size = sizeof(clientaddr);
+	int clientfd;
+	int nlen;
+	pthread_mutex_lock(&aclock);
+	clientfd = accept(serverfd,(struct sockaddr *)&clientaddr,&size);
+	pthread_mutex_unlock(&aclock);
+	while(1)
+	{
+		//接收包大小
+		char szbuf[1024];
+		bzero(&szbuf,sizeof(szbuf));
+		int nPackSize;
+		nlen = recv(clientfd,(char *)&nPackSize,sizeof(int),0);
+		if(nlen <= 0)
+		{
+			printf("接收失败！\n");
+			close(clientfd);
+	   }
+		printf("大小接收成功%d\n",nPackSize);
+		//接收包内容
+		char *szContect = (char *)malloc(nPackSize);
+		int offset = 0;
+		while(nPackSize != 0)
+		{
+			nlen = recv(clientfd,szContect+offset,nPackSize,0);
+			nPackSize -=nlen;
+			offset+=nlen;
+		}
+		printf("内容接收成功\n");
+		DealData(clientfd,szbuf);
+
+		
+	}
+	return NULL;
+}
+
+void EPollNet()
+{
+	//1.初始化网络
+	int serverfd = InitNet();
+	struct epoll_event envs[1];
+	struct epoll_event enTemp;
+	enTemp.events = EPOLLIN;
+	enTemp.events |= EPOLLET;
+	enTemp.data.fd = serverfd;
+	int epfd = epoll_create(1);
+	int ready;
+	epoll_ctl(epfd,EPOLL_CTL_ADD,serverfd,&enTemp);
+	printf("Server is waiting.........\n");
+	pool_t *p = create(10,100,300);
+	if(p == NULL)
+	{
+		printf("线程池创建成功!\n");
+		exit(0);
+	}
+	printf("线程池创建成功!\n");
+	task_t task;
+	task.job = UserJob;
+	task.arg = (void *)&serverfd;
+	while(p->thread_shutdown)
+	{
+		if((ready = epoll_wait(epfd,envs,1,-1)) > 0)
+		{
+			addtask(p,task);
+		}
+		
+	}
+}
+void UnInitNet()
+{
+	pthread_mutex_destroy(&aclock);
+}
